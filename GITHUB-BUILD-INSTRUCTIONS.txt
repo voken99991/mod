@@ -1,5 +1,12 @@
-1. Put the contents of this project in the ROOT of your GitHub repository.
-2. Make sure .github/workflows/build.yml exists at the repository root.
-3. Open GitHub Actions and run Build Chaos Vote Mod.
-4. Download the chaos-vote-jar artifact from the completed workflow.
-5. Put chaos-vote-1.0.0.jar into ChunkArc's mods folder.
+BUILD
+=====
+
+1. Upload the contents of this project to the ROOT of a GitHub repository.
+2. Open Actions.
+3. Select "Build Chaos Vote Mod".
+4. Click "Run workflow".
+5. The workflow downloads and uses Gradle 9.2.0 directly, so no system Gradle version is used.
+6. Download the "chaos-vote-jar" artifact from the completed run.
+7. Put the .jar inside your Minecraft server's mods folder.
+
+Target: Minecraft 1.21.11 / Fabric.
