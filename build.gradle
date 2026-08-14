@@ -1,5 +1,5 @@
 plugins {
-    id 'fabric-loom' version "${loom_version}"
+    id 'net.fabricmc.fabric-loom-remap' version "${loom_version}"
     id 'maven-publish'
 }
 
@@ -52,6 +52,5 @@ publishing {
         }
     }
     repositories {
-        // Add a Maven repository here if you later want to publish the mod.
     }
 }
