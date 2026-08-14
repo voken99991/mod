@@ -10,7 +10,9 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.SpawnReason;
 import net.minecraft.entity.effect.StatusEffectInstance;
+import net.minecraft.registry.entry.RegistryEntry;
 import net.minecraft.entity.effect.StatusEffects;
+import net.minecraft.entity.passive.AnimalEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.text.ClickEvent;
@@ -246,7 +248,7 @@ public final class ChaosVoteManager {
         player.giveItemStack(new ItemStack(item, amount));
     }
 
-    private void status(ServerPlayerEntity player, net.minecraft.entity.effect.StatusEffect effect, int ticks, int amplifier) {
+    private void status(ServerPlayerEntity player, RegistryEntry<net.minecraft.entity.effect.StatusEffect> effect, int ticks, int amplifier) {
         player.addStatusEffect(new StatusEffectInstance(effect, ticks, amplifier));
     }
 
@@ -256,7 +258,7 @@ public final class ChaosVoteManager {
         double z = player.getZ() + (RANDOM.nextDouble() * 2 - 1) * radius;
         int top = world.getTopY(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, (int) Math.floor(x), (int) Math.floor(z));
         double y = Math.max(world.getBottomY() + 1, top + 1);
-        player.teleport((net.minecraft.server.world.ServerWorld) world, x, y, z, Set.of(), player.getYaw(), player.getPitch(), false);
+        player.teleport((net.minecraft.server.world.ServerWorld) world, x, y, z, player.getYaw(), player.getPitch());
     }
 
     private void spawnNear(ServerPlayerEntity player, EntityType<?> type, int count) {
@@ -298,8 +300,8 @@ public final class ChaosVoteManager {
             while (a == b && guard++ < 10) b = p.get(RANDOM.nextInt(p.size()));
             Vec3d apos = a.getPos();
             Vec3d bpos = b.getPos();
-            a.teleport(a.getServerWorld(), bpos.x, bpos.y, bpos.z, Set.of(), b.getYaw(), b.getPitch(), false);
-            b.teleport(b.getServerWorld(), apos.x, apos.y, apos.z, Set.of(), a.getYaw(), a.getPitch(), false);
+            a.teleport(a.getServerWorld(), bpos.x, bpos.y, bpos.z, b.getYaw(), b.getPitch());
+            b.teleport(b.getServerWorld(), apos.x, apos.y, apos.z, a.getYaw(), a.getPitch());
         });
         add("Low Gravity", "Everyone gets Jump Boost III and Slow Falling.", 3, (s, p) -> p.forEach(player -> { status(player, StatusEffects.JUMP_BOOST, 400, 2); status(player, StatusEffects.SLOW_FALLING, 400, 0); }));
         add("Levitation", "One player floats for 8 seconds.", 3, (s, p) -> status(randomPlayer(p), StatusEffects.LEVITATION, 160, 1));

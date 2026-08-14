@@ -1,0 +1,6 @@
+This version fixes the Minecraft 1.21.1 compilation errors:
+- StatusEffect is now handled as RegistryEntry<StatusEffect>.
+- ServerPlayerEntity.teleport uses the 1.21.1 overload.
+- The old invalid Mob import is removed.
+
+Build with GitHub Actions using the included .github/workflows/build.yml.
