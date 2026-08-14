@@ -17,5 +17,5 @@ Also install a Fabric API build compatible with Minecraft 1.21.11.
 Minecraft 1.21.11
 Fabric Loader 0.18.1
 Fabric API 0.141.3+1.21.11
-Loom 1.14
+Loom 1.14.10
 Java 21
