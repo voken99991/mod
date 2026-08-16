@@ -1,28 +1,9 @@
-# Chaos Vote — Minecraft 1.21.11
+# Chaos Vote
 
-Fabric server-side chaos event mod.
+Minecraft 1.21.11 Fabric server-side chaos game. Every 30 seconds a round completes: 15s waiting, 5s countdown, 10s voting, then the winning event fires.
 
-## IMPORTANT GitHub setup
+During voting, players can simply type `1`, `2`, or `3` in chat. The message is consumed so it does not clutter chat. `/chaos vote 1|2|3` and admin controls remain available.
 
-Delete every existing file inside `.github/workflows/` in your repository first.
-Then copy this project so `.github/workflows/BUILD-CHAOS-VOTE-1-21-11.yml` is at the repository root.
+Build requirements: Java 21 and Gradle 9.2.0. The included GitHub Actions workflow downloads and invokes Gradle 9.2.0 directly.
 
-Go to **Actions → BUILD CHAOS VOTE 1.21.11 → Run workflow**.
-
-The workflow downloads and verifies **Gradle 9.2.0 itself**. Do not use an older Gradle workflow.
-
-The build artifact is `chaos-vote-1.21.11-jar`.
-
-## Server
-
-Upload the resulting `chaos-vote-1.0.0.jar` into the server's `mods` folder, alongside Fabric API for Minecraft 1.21.11.
-
-## Gameplay
-
-- About every 30 seconds a new round starts.
-- 5-second countdown.
-- 10-second vote.
-- Players vote by typing only `1`, `2`, or `3` in chat.
-- Boss bar shows countdown and live vote totals.
-- Countdown/vote/winner sound effects are included.
-- `/chaos start`, `/chaos stop`, `/chaos skip`, `/chaos status` are available to operators.
+Admin commands: `/chaos start`, `/chaos stop`, `/chaos skip`, `/chaos status`.
