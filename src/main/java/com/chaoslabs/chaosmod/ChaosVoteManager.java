@@ -171,8 +171,8 @@ public final class ChaosVoteManager {
             MutableText button = Text.literal("  [" + index + "] " + option.name())
                     .formatted(index == 1 ? Formatting.AQUA : index == 2 ? Formatting.YELLOW : Formatting.RED)
                     .styled(style -> style
-                            .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/chaos vote " + index))
-                            .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Text.literal(option.description()).formatted(Formatting.GRAY))));
+                            .withClickEvent(new ClickEvent.RunCommand("/chaos vote " + index))
+                            .withHoverEvent(new HoverEvent.ShowText(Text.literal(option.description()).formatted(Formatting.GRAY))));
             server.getPlayerManager().broadcast(button, false);
         }
         playSound(server, "minecraft:block.note_block.bell", 1.0f, 1.0f);
@@ -332,7 +332,7 @@ public final class ChaosVoteManager {
     }
 
     private void teleportRandomly(ServerPlayerEntity player, double radius) {
-        net.minecraft.server.world.ServerWorld world = player.getWorld();
+        net.minecraft.server.world.ServerWorld world = player.getEntityWorld();
         double x = player.getX() + (RANDOM.nextDouble() * 2 - 1) * radius;
         double z = player.getZ() + (RANDOM.nextDouble() * 2 - 1) * radius;
         int top = world.getTopY(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, (int) Math.floor(x), (int) Math.floor(z));
@@ -341,7 +341,7 @@ public final class ChaosVoteManager {
     }
 
     private void spawnNear(ServerPlayerEntity player, EntityType<?> type, int count) {
-        net.minecraft.server.world.ServerWorld world = player.getWorld();
+        net.minecraft.server.world.ServerWorld world = player.getEntityWorld();
         for (int i = 0; i < count; i++) {
             double angle = RANDOM.nextDouble() * Math.PI * 2;
             double distance = 2.5 + RANDOM.nextDouble() * 4.0;
@@ -379,8 +379,8 @@ public final class ChaosVoteManager {
             while (a == b && guard++ < 10) b = p.get(RANDOM.nextInt(p.size()));
             Vec3d apos = new Vec3d(a.getX(), a.getY(), a.getZ());
             Vec3d bpos = new Vec3d(b.getX(), b.getY(), b.getZ());
-            a.teleport(a.getWorld(), bpos.x, bpos.y, bpos.z, Set.of(), b.getYaw(), b.getPitch(), false);
-            b.teleport(b.getWorld(), apos.x, apos.y, apos.z, Set.of(), a.getYaw(), a.getPitch(), false);
+            a.teleport(a.getEntityWorld(), bpos.x, bpos.y, bpos.z, Set.of(), b.getYaw(), b.getPitch(), false);
+            b.teleport(b.getEntityWorld(), apos.x, apos.y, apos.z, Set.of(), a.getYaw(), a.getPitch(), false);
         });
         add("Low Gravity", "Everyone gets Jump Boost III and Slow Falling.", 3, (s, p) -> p.forEach(player -> { status(player, StatusEffects.JUMP_BOOST, 400, 2); status(player, StatusEffects.SLOW_FALLING, 400, 0); }));
         add("Levitation", "One player floats for 8 seconds.", 3, (s, p) -> status(randomPlayer(p), StatusEffects.LEVITATION, 160, 1));
@@ -439,14 +439,14 @@ public final class ChaosVoteManager {
 
     private void damage(ServerPlayerEntity player, float amount) {
         if (player.isCreative() || player.isSpectator()) return;
-        player.damage(player.getWorld(), player.getDamageSources().generic(), amount);
+        player.damage(player.getEntityWorld(), player.getDamageSources().generic(), amount);
     }
 
     private void strikeNear(ServerPlayerEntity player, int count) {
         for (int i = 0; i < count; i++) {
             double x = player.getX() + (RANDOM.nextDouble() * 8 - 4);
             double z = player.getZ() + (RANDOM.nextDouble() * 8 - 4);
-            int y = player.getWorld().getTopY(Heightmap.Type.MOTION_BLOCKING, (int) x, (int) z);
+            int y = player.getEntityWorld().getTopY(Heightmap.Type.MOTION_BLOCKING, (int) x, (int) z);
             execute(server, "summon minecraft:lightning_bolt " + x + " " + y + " " + z);
         }
     }
