@@ -1,45 +1,60 @@
 package com.chaoslabs.chaosmod;
 
-import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
-import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.text.Text;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
+import java.util.List;
+import java.util.Random;
 
 public class ChaosVoteManager {
-    private static boolean votingActive = false;
-    private static final Map<UUID, Integer> playerVotes = new HashMap<>();
+    private static final int ROUND_INTERVAL_TICKS = 45 * 20; // 45 seconds at 20 ticks-per-second
+    private static int tickCounter = 0;
+    private static boolean chaosActive = false;
+    private static final Random RANDOM = new Random();
 
-    public static void registerListeners() {
-        // Intercept player chat messages during voting phases
-        ServerMessageEvents.CHAT_MESSAGE.register((message, sender, params) -> {
-            if (!votingActive) return;
+    // Call this every server tick
+    public static void tick(MinecraftServer server) {
+        if (!chaosActive) return;
 
-            String content = message.getContent().getString().trim();
+        tickCounter++;
 
-            // Detect if the player sent a single key: "1", "2", or "3"
-            if (content.equals("1") || content.equals("2") || content.equals("3")) {
-                int option = Integer.parseInt(content);
-                recordVote(sender, option);
-            }
-        });
+        // Every 45 seconds, trigger a random event
+        if (tickCounter >= ROUND_INTERVAL_TICKS) {
+            triggerRandomEvent(server);
+            tickCounter = 0; // Reset the timer
+        }
     }
 
-    public static void recordVote(ServerPlayerEntity player, int option) {
-        playerVotes.put(player.getUuid(), option);
-        player.sendMessage(Text.literal("§a[Chaos Vote] You selected Option " + option + "!"), true);
+    private static void triggerRandomEvent(MinecraftServer server) {
+        // Fetch your registered events (adjust this method call to match your ChaosEvent.java setup)
+        List<ChaosEvent> events = ChaosEvent.getRegisteredEvents();
+        
+        if (events == null || events.isEmpty()) {
+            server.getPlayerManager().broadcast(Text.literal("§c[Chaos] Error: No events are registered!"), false);
+            return;
+        }
+
+        // Pick a random event
+        ChaosEvent selectedEvent = events.get(RANDOM.nextInt(events.size()));
+        
+        // Execute the chosen event
+        selectedEvent.execute(server);
+
+        // Broadcast the triggered event to chat
+        server.getPlayerManager().broadcast(
+            Text.literal("§6[Chaos] §eTriggered event: §f" + selectedEvent.getName()), 
+            false
+        );
     }
 
-    public static boolean isVotingActive() {
-        return votingActive;
+    public static boolean isChaosActive() {
+        return chaosActive;
     }
 
-    public static void setVotingActive(boolean active) {
-        votingActive = active;
+    public static void setChaosActive(boolean active) {
+        chaosActive = active;
         if (active) {
-            playerVotes.clear();
+            tickCounter = 0; // Reset timer when started so it takes a full 45s for the first event
         }
     }
 }
