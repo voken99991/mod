@@ -1,485 +1,130 @@
 package com.chaoslabs.chaosmod;
 
-import com.mojang.brigadier.CommandDispatcher;
-import com.mojang.brigadier.arguments.IntegerArgumentType;
-import com.mojang.brigadier.context.CommandContext;
-import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
-import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.SpawnReason;
-import net.minecraft.entity.effect.StatusEffectInstance;
-import net.minecraft.registry.entry.RegistryEntry;
-import net.minecraft.entity.effect.StatusEffects;
-import net.minecraft.entity.passive.AnimalEntity;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.text.ClickEvent;
-import net.minecraft.text.HoverEvent;
-import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.command.CommandManager;
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.entity.boss.BossBar;
 import net.minecraft.entity.boss.ServerBossBar;
-import net.minecraft.command.DefaultPermissions;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.command.CommandManager;
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
-import net.minecraft.text.MutableText;
 import net.minecraft.util.Formatting;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.Heightmap;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Random;
-import java.util.Set;
-import java.util.UUID;
-import java.util.function.BiConsumer;
 
 public final class ChaosVoteManager {
+    private static final int INTERVAL_TICKS = 45 * 20; // 45 seconds (900 ticks)
     private static final Random RANDOM = new Random();
-    private static final int WAIT_TICKS = 300; // 15s
-    private static final int COUNTDOWN_TICKS = 100; // 5s
-    private static final int VOTE_TICKS = 200; // 10s
 
     private final List<ChaosEvent> events = new ArrayList<>();
-    private final Map<UUID, Integer> votes = new HashMap<>();
-    private final Set<String> recentEvents = new HashSet<>();
+    private final ServerBossBar bossBar = new ServerBossBar(
+        Text.literal("NEXT CHAOS EVENT").formatted(Formatting.LIGHT_PURPLE, Formatting.BOLD),
+        BossBar.Color.PURPLE,
+        BossBar.Style.PROGRESS
+    );
 
     private MinecraftServer server;
-    private boolean running;
-    private boolean voting;
-    private boolean countdown;
-    private int timer;
-    private final ServerBossBar bossBar = new ServerBossBar(Text.literal("Chaos Vote"), BossBar.Color.PURPLE, BossBar.Style.PROGRESS);
-    private List<ChaosEvent> currentOptions = List.of();
+    private boolean running = true;
+    private int timer = INTERVAL_TICKS;
 
     public ChaosVoteManager() {
         createEvents();
-        CommandRegistrationCallback.EVENT.register(this::registerCommands);
-        ServerMessageEvents.ALLOW_CHAT_MESSAGE.register((message, sender, params) -> {
-            if (!voting) return true;
-            String content = message.getSignedContent().trim();
-            if (content.equals("1") || content.equals("2") || content.equals("3")) {
-                castVote(sender, Integer.parseInt(content));
-                return false;
-            }
-            return true;
+
+        // Register in-game control commands
+        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
+            dispatcher.register(CommandManager.literal("chaos")
+                .requires(source -> source.hasPermissionLevel(2))
+                .then(CommandManager.literal("start").executes(ctx -> {
+                    running = true;
+                    timer = INTERVAL_TICKS;
+                    ctx.getSource().sendFeedback(() -> Text.literal("§a[Chaos] Started! Events trigger every 45s."), true);
+                    return 1;
+                }))
+                .then(CommandManager.literal("stop").executes(ctx -> {
+                    running = false;
+                    bossBar.clearPlayers();
+                    bossBar.setVisible(false);
+                    ctx.getSource().sendFeedback(() -> Text.literal("§c[Chaos] Stopped."), true);
+                    return 1;
+                }))
+                .then(CommandManager.literal("toggle").executes(ctx -> {
+                    running = !running;
+                    if (!running) {
+                        bossBar.clearPlayers();
+                        bossBar.setVisible(false);
+                    } else {
+                        timer = INTERVAL_TICKS;
+                    }
+                    ctx.getSource().sendFeedback(() -> Text.literal("§e[Chaos] Toggled to " + (running ? "ON" : "OFF")), true);
+                    return 1;
+                }))
+            );
         });
+
         ServerLifecycleEvents.SERVER_STARTED.register(s -> {
             server = s;
-            running = false;
-            voting = false;
-            countdown = false;
-            timer = WAIT_TICKS;
-            bossBar.setVisible(false);
+            running = true;
+            timer = INTERVAL_TICKS;
         });
+
         ServerLifecycleEvents.SERVER_STOPPED.register(s -> {
             server = null;
             running = false;
-            voting = false;
-            countdown = false;
             bossBar.clearPlayers();
-            bossBar.setVisible(false);
         });
+
         ServerTickEvents.END_SERVER_TICK.register(this::tick);
     }
 
     private void tick(MinecraftServer server) {
         if (!running || server.getPlayerManager().getPlayerList().isEmpty()) {
-            if (bossBar.isVisible()) {
-                bossBar.clearPlayers();
-                bossBar.setVisible(false);
-            }
+            bossBar.setVisible(false);
             return;
         }
 
-        if (countdown) {
-            timer--;
-            updateCountdownBar(server);
-            if (timer % 20 == 0 || timer == COUNTDOWN_TICKS - 1) {
-                int seconds = Math.max(1, (timer + 19) / 20);
-                broadcastActionbar(server, "CHAOS IN " + seconds);
-                playSound(server, "minecraft:block.note_block.pling", 0.8f, 0.8f + seconds * 0.15f);
-            }
-            if (timer <= 0) startVote(server);
-            return;
-        }
-
-        if (voting) {
-            timer--;
-            updateVoteBar(server);
-            if (timer <= 0) finishVote(server);
-            return;
+        // Sync bossbar with current players
+        bossBar.setVisible(true);
+        bossBar.clearPlayers();
+        for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+            bossBar.addPlayer(player);
         }
 
         timer--;
+
+        // Display timer countdown
+        float percent = Math.max(0f, Math.min(1f, timer / (float) INTERVAL_TICKS));
+        bossBar.setPercent(percent);
+        int secondsLeft = Math.max(1, (timer + 19) / 20);
+        bossBar.setName(Text.literal("NEXT CHAOS EVENT IN " + secondsLeft + "s").formatted(Formatting.LIGHT_PURPLE, Formatting.BOLD));
+
         if (timer <= 0) {
-            countdown = true;
-            timer = COUNTDOWN_TICKS;
-            bossBar.clearPlayers();
-            for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) bossBar.addPlayer(player);
-            bossBar.setVisible(true);
-            bossBar.setColor(BossBar.Color.PURPLE);
-            updateCountdownBar(server);
+            timer = INTERVAL_TICKS;
+            triggerRandomEvent(server);
         }
     }
 
-    private void broadcastActionbar(MinecraftServer server, String message) {
-        server.getPlayerManager().broadcast(Text.literal(message).formatted(Formatting.LIGHT_PURPLE, Formatting.BOLD), true);
-    }
+    private void triggerRandomEvent(MinecraftServer server) {
+        if (events.isEmpty()) return;
 
-    private void updateCountdownBar(MinecraftServer server) {
-        float pct = Math.max(0f, Math.min(1f, timer / (float) COUNTDOWN_TICKS));
-        bossBar.setPercent(pct);
-        bossBar.setName(Text.literal("CHAOS IN " + Math.max(1, (timer + 19) / 20) + "s").formatted(Formatting.LIGHT_PURPLE, Formatting.BOLD));
-    }
-
-    private void updateVoteBar(MinecraftServer server) {
-        int[] counts = { countVotes(0), countVotes(1), countVotes(2) };
-        float pct = Math.max(0f, Math.min(1f, timer / (float) VOTE_TICKS));
-        bossBar.setPercent(pct);
-        bossBar.setName(Text.literal("VOTE " + Math.max(0, (timer + 19) / 20) + "s  |  1: " + counts[0] + "   2: " + counts[1] + "   3: " + counts[2])
-                .formatted(Formatting.GOLD, Formatting.BOLD));
-    }
-
-    private void startVote(MinecraftServer server) {
-        countdown = false;
-        currentOptions = pickOptions(3);
-        votes.clear();
-        voting = true;
-        timer = VOTE_TICKS;
-        bossBar.setColor(BossBar.Color.BLUE);
-        bossBar.setVisible(true);
-        bossBar.clearPlayers();
-        for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) bossBar.addPlayer(player);
-        updateVoteBar(server);
-
-        broadcastHeader(server, "CHAOS VOTE", Formatting.LIGHT_PURPLE);
-        server.getPlayerManager().broadcast(Text.literal("Type 1, 2 or 3 to vote! You have 10 seconds.").formatted(Formatting.GRAY), false);
-
-        for (int i = 0; i < currentOptions.size(); i++) {
-            ChaosEvent option = currentOptions.get(i);
-            int index = i + 1;
-            MutableText button = Text.literal("  [" + index + "] " + option.name())
-                    .formatted(index == 1 ? Formatting.AQUA : index == 2 ? Formatting.YELLOW : Formatting.RED)
-                    .styled(style -> style
-                            .withClickEvent(new ClickEvent.RunCommand("/chaos vote " + index))
-                            .withHoverEvent(new HoverEvent.ShowText(Text.literal(option.description()).formatted(Formatting.GRAY))));
-            server.getPlayerManager().broadcast(button, false);
-        }
-        playSound(server, "minecraft:block.note_block.bell", 1.0f, 1.0f);
-    }
-
-    private void finishVote(MinecraftServer server) {
-        voting = false;
-        countdown = false;
-        bossBar.clearPlayers();
-        bossBar.setVisible(false);
-
-        int winningIndex = chooseWinner();
-        ChaosEvent winner = currentOptions.get(winningIndex);
-        int winnerVotes = countVotes(winningIndex);
-
-        broadcastHeader(server, "CHAOS ACTIVATED", Formatting.RED);
-        server.getPlayerManager().broadcast(
-                Text.literal(winner.name() + " — " + winner.description() + "  (" + winnerVotes + " vote" + (winnerVotes == 1 ? "" : "s") + ")")
-                        .formatted(Formatting.WHITE), false);
-
+        // Randomly select one event
+        ChaosEvent event = events.get(RANDOM.nextInt(events.size()));
         List<ServerPlayerEntity> players = new ArrayList<>(server.getPlayerManager().getPlayerList());
-        if (!players.isEmpty()) winner.action().accept(server, players);
 
-        recentEvents.add(winner.name());
-        if (recentEvents.size() > 8) {
-            recentEvents.remove(recentEvents.iterator().next());
-        }
-        playSound(server, "minecraft:entity.player.levelup", 1.0f, 1.0f);
-        timer = WAIT_TICKS;
-    }
-
-    private int chooseWinner() {
-        int best = -1;
-        int bestVotes = -1;
-        for (int i = 0; i < currentOptions.size(); i++) {
-            int count = countVotes(i);
-            if (count > bestVotes) {
-                best = i;
-                bestVotes = count;
-            } else if (count == bestVotes && RANDOM.nextBoolean()) {
-                best = i;
-            }
-        }
-        return Math.max(best, 0);
-    }
-
-    private int countVotes(int index) {
-        int count = 0;
-        for (Integer vote : votes.values()) {
-            if (vote == index) count++;
-        }
-        return count;
-    }
-
-    private List<ChaosEvent> pickOptions(int count) {
-        List<ChaosEvent> pool = new ArrayList<>();
-        for (ChaosEvent event : events) {
-            if (!recentEvents.contains(event.name())) {
-                for (int i = 0; i < Math.max(1, event.weight()); i++) pool.add(event);
-            }
-        }
-        Collections.shuffle(pool, RANDOM);
-
-        List<ChaosEvent> result = new ArrayList<>();
-        Set<String> names = new HashSet<>();
-        for (ChaosEvent candidate : pool) {
-            if (names.add(candidate.name())) {
-                result.add(candidate);
-                if (result.size() == count) return result;
-            }
+        if (!players.isEmpty()) {
+            event.action().accept(server, players);
         }
 
-        for (ChaosEvent candidate : events) {
-            if (names.add(candidate.name())) {
-                result.add(candidate);
-                if (result.size() == count) break;
-            }
-        }
-        return result;
-    }
-
-    private void registerCommands(CommandDispatcher<ServerCommandSource> dispatcher,
-                                   net.minecraft.command.CommandRegistryAccess registryAccess,
-                                   CommandManager.RegistrationEnvironment environment) {
-        dispatcher.register(CommandManager.literal("chaos")
-                .then(CommandManager.literal("start").requires(source -> source.getPermissions().hasPermission(DefaultPermissions.ADMINS)).executes(ctx -> {
-                    if (running) {
-                        ctx.getSource().sendError(Text.literal("Chaos Vote is already running."));
-                        return 0;
-                    }
-                    running = true;
-                    voting = false;
-                    countdown = false;
-                    timer = WAIT_TICKS;
-                    ctx.getSource().sendFeedback(() -> Text.literal("Chaos Vote started. Next vote begins in 15 seconds.").formatted(Formatting.LIGHT_PURPLE), true);
-                    return 1;
-                }))
-                .then(CommandManager.literal("stop").requires(source -> source.getPermissions().hasPermission(DefaultPermissions.ADMINS)).executes(ctx -> {
-                    running = false;
-                    voting = false;
-                    countdown = false;
-                    bossBar.clearPlayers();
-                    bossBar.setVisible(false);
-                    ctx.getSource().sendFeedback(() -> Text.literal("Chaos Vote stopped.").formatted(Formatting.GRAY), true);
-                    return 1;
-                }))
-                .then(CommandManager.literal("skip").requires(source -> source.getPermissions().hasPermission(DefaultPermissions.ADMINS)).executes(ctx -> {
-                    if (!voting) {
-                        ctx.getSource().sendError(Text.literal("There is no active vote."));
-                        return 0;
-                    }
-                    timer = 0;
-                    ctx.getSource().sendFeedback(() -> Text.literal("Vote skipped; revealing the winner...").formatted(Formatting.YELLOW), true);
-                    return 1;
-                }))
-                .then(CommandManager.literal("status").executes(ctx -> {
-                    String state = !running ? "stopped" : countdown ? "countdown" : voting ? "voting" : "waiting";
-                    int seconds = Math.max(0, (timer + 19) / 20);
-                    ctx.getSource().sendFeedback(() -> Text.literal("Chaos status: " + state + " | " + seconds + "s remaining").formatted(Formatting.GRAY), false);
-                    return 1;
-                }))
-                .then(CommandManager.literal("vote")
-                        .then(CommandManager.argument("option", IntegerArgumentType.integer(1, 3)).executes(ctx -> castVote(ctx, IntegerArgumentType.getInteger(ctx, "option"))))));
-    }
-
-    private int castVote(CommandContext<ServerCommandSource> ctx, int oneBasedOption) {
-        if (!(ctx.getSource().getEntity() instanceof ServerPlayerEntity player)) {
-            ctx.getSource().sendError(Text.literal("Only players can vote."));
-            return 0;
-        }
-        return castVote(player, oneBasedOption);
-    }
-
-    private int castVote(ServerPlayerEntity player, int oneBasedOption) {
-        if (!voting || currentOptions.size() < oneBasedOption) return 0;
-        votes.put(player.getUuid(), oneBasedOption - 1);
-        updateVoteBar(server);
-        player.sendMessage(Text.literal("Vote: " + currentOptions.get(oneBasedOption - 1).name()).formatted(Formatting.GREEN), true);
-        playSound(server, "minecraft:block.note_block.pling", 0.5f, 1.0f + (oneBasedOption - 1) * 0.25f);
-        return 1;
-    }
-
-    private void broadcastHeader(MinecraftServer server, String title, Formatting color) {
-        server.getPlayerManager().broadcast(Text.literal("\n" + title).formatted(color, Formatting.BOLD), false);
-    }
-
-    private ServerPlayerEntity randomPlayer(List<ServerPlayerEntity> players) {
-        return players.get(RANDOM.nextInt(players.size()));
-    }
-
-    private void give(ServerPlayerEntity player, net.minecraft.item.Item item, int amount) {
-        player.giveItemStack(new ItemStack(item, amount));
-    }
-
-    private void status(ServerPlayerEntity player, RegistryEntry<net.minecraft.entity.effect.StatusEffect> effect, int ticks, int amplifier) {
-        player.addStatusEffect(new StatusEffectInstance(effect, ticks, amplifier));
-    }
-
-    private void teleportRandomly(ServerPlayerEntity player, double radius) {
-        net.minecraft.server.world.ServerWorld world = player.getEntityWorld();
-        double x = player.getX() + (RANDOM.nextDouble() * 2 - 1) * radius;
-        double z = player.getZ() + (RANDOM.nextDouble() * 2 - 1) * radius;
-        int top = world.getTopY(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, (int) Math.floor(x), (int) Math.floor(z));
-        double y = Math.max(world.getBottomY() + 1, top + 1);
-        player.teleport(world, x, y, z, Set.of(), player.getYaw(), player.getPitch(), false);
-    }
-
-    private void spawnNear(ServerPlayerEntity player, EntityType<?> type, int count) {
-        net.minecraft.server.world.ServerWorld world = player.getEntityWorld();
-        for (int i = 0; i < count; i++) {
-            double angle = RANDOM.nextDouble() * Math.PI * 2;
-            double distance = 2.5 + RANDOM.nextDouble() * 4.0;
-            int x = (int) Math.floor(player.getX() + Math.cos(angle) * distance);
-            int z = (int) Math.floor(player.getZ() + Math.sin(angle) * distance);
-            int y = world.getTopY(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, x, z) + 1;
-            type.spawn(world, new BlockPos(x, y, z), SpawnReason.COMMAND);
-        }
+        // Broadcast to server chat
+        server.getPlayerManager().broadcast(
+            Text.literal("§6[CHAOS] §eTriggered: §f" + event.name() + " §7(" + event.description() + ")"),
+            false
+        );
     }
 
     private void createEvents() {
-        add("Jackpot", "Everyone gets 3 diamonds.", 2, (s, p) -> p.forEach(player -> give(player, Items.DIAMOND, 3)));
-        add("Emerald Rain", "Everyone gets 8 emeralds.", 2, (s, p) -> p.forEach(player -> give(player, Items.EMERALD, 8)));
-        add("Golden Hour", "Everyone gets 2 golden apples.", 2, (s, p) -> p.forEach(player -> give(player, Items.GOLDEN_APPLE, 2)));
-        add("Speed Demon", "Everyone gets Speed II for 30 seconds.", 3, (s, p) -> p.forEach(player -> status(player, StatusEffects.SPEED, 600, 1)));
-        add("Mega Strength", "Everyone gets Strength II for 15 seconds.", 2, (s, p) -> p.forEach(player -> status(player, StatusEffects.STRENGTH, 300, 1)));
-        add("Feather Feet", "Everyone gets Slow Falling for 30 seconds.", 3, (s, p) -> p.forEach(player -> status(player, StatusEffects.SLOW_FALLING, 600, 0)));
-        add("Instant Snack", "Everyone is completely fed.", 3, (s, p) -> p.forEach(player -> player.getHungerManager().setFoodLevel(20)));
-        add("XP Shower", "Everyone gets 15 XP levels.", 2, (s, p) -> p.forEach(player -> player.addExperienceLevels(15)));
-        add("Random Diamond", "One player receives a diamond block.", 2, (s, p) -> give(randomPlayer(p), Items.DIAMOND_BLOCK, 1));
-        add("Chosen One", "One player gets a netherite ingot.", 1, (s, p) -> give(randomPlayer(p), Items.NETHERITE_INGOT, 1));
-        add("Free Horse", "One player gets a random horse nearby.", 3, (s, p) -> spawnNear(randomPlayer(p), EntityType.HORSE, 1));
-        add("Cow Party", "A herd of cows appears around one player.", 4, (s, p) -> spawnNear(randomPlayer(p), EntityType.COW, 12));
-        add("Chicken Attack", "A ridiculous flock of chickens appears.", 4, (s, p) -> spawnNear(randomPlayer(p), EntityType.CHICKEN, 20));
-        add("Bee Movie", "One player gets surrounded by bees.", 3, (s, p) -> spawnNear(randomPlayer(p), EntityType.BEE, 10));
-        add("Cat Lottery", "Cats appear around everyone.", 3, (s, p) -> p.forEach(player -> spawnNear(player, EntityType.CAT, 3)));
-        add("Wandering Trader", "A trader appears beside a random player.", 1, (s, p) -> spawnNear(randomPlayer(p), EntityType.WANDERING_TRADER, 1));
-        add("Teleport Roulette", "Everyone is teleported somewhere nearby.", 4, (s, p) -> p.forEach(player -> teleportRandomly(player, 150)));
-        add("One-Way Ticket", "One random player is teleported far away.", 3, (s, p) -> teleportRandomly(randomPlayer(p), 500));
-        add("Swap!", "Two random players swap positions.", 3, (s, p) -> {
-            if (p.size() < 2) return;
-            ServerPlayerEntity a = p.get(RANDOM.nextInt(p.size()));
-            ServerPlayerEntity b = p.get(RANDOM.nextInt(p.size()));
-            int guard = 0;
-            while (a == b && guard++ < 10) b = p.get(RANDOM.nextInt(p.size()));
-            Vec3d apos = new Vec3d(a.getX(), a.getY(), a.getZ());
-            Vec3d bpos = new Vec3d(b.getX(), b.getY(), b.getZ());
-            a.teleport(a.getEntityWorld(), bpos.x, bpos.y, bpos.z, Set.of(), b.getYaw(), b.getPitch(), false);
-            b.teleport(b.getEntityWorld(), apos.x, apos.y, apos.z, Set.of(), a.getYaw(), a.getPitch(), false);
-        });
-        add("Low Gravity", "Everyone gets Jump Boost III and Slow Falling.", 3, (s, p) -> p.forEach(player -> { status(player, StatusEffects.JUMP_BOOST, 400, 2); status(player, StatusEffects.SLOW_FALLING, 400, 0); }));
-        add("Levitation", "One player floats for 8 seconds.", 3, (s, p) -> status(randomPlayer(p), StatusEffects.LEVITATION, 160, 1));
-        add("Haste", "Everyone gets Haste III for 20 seconds.", 3, (s, p) -> p.forEach(player -> status(player, StatusEffects.HASTE, 400, 2)));
-        add("Regeneration", "Everyone gets Regeneration II for 15 seconds.", 2, (s, p) -> p.forEach(player -> status(player, StatusEffects.REGENERATION, 300, 1)));
-        add("Resistance", "Everyone gets Resistance II for 15 seconds.", 1, (s, p) -> p.forEach(player -> status(player, StatusEffects.RESISTANCE, 300, 1)));
-
-        add("Big Bonk", "One random player takes 6 hearts of damage.", 4, (s, p) -> damageRandom(p, 12));
-        add("Tiny Bonk", "Everyone takes 1 heart of damage.", 4, (s, p) -> p.forEach(player -> damage(player, 2)));
-        add("Half Hearts", "Everyone is reduced to half health, but cannot die from this event.", 2, (s, p) -> p.forEach(player -> player.setHealth(Math.max(1f, player.getHealth() / 2f))));
-        add("Oops, Thunder", "Lightning strikes near a random player.", 4, (s, p) -> strikeNear(randomPlayer(p), 2));
-        add("Triple Thunder", "Three lightning bolts appear near one player.", 2, (s, p) -> strikeNear(randomPlayer(p), 3));
-        add("Creeper Delivery", "Three creepers appear around a random player.", 2, (s, p) -> spawnNear(randomPlayer(p), EntityType.CREEPER, 3));
-        add("Spider Party", "A swarm of spiders appears around one player.", 3, (s, p) -> spawnNear(randomPlayer(p), EntityType.SPIDER, 8));
-        add("Zombie Problem", "A group of zombies appears around one player.", 3, (s, p) -> spawnNear(randomPlayer(p), EntityType.ZOMBIE, 10));
-        add("Poisoned", "One player gets Poison II for 12 seconds.", 3, (s, p) -> status(randomPlayer(p), StatusEffects.POISON, 240, 1));
-        add("Blindness", "Everyone is blind for 8 seconds.", 3, (s, p) -> p.forEach(player -> status(player, StatusEffects.BLINDNESS, 160, 0)));
-        add("Slowness", "Everyone gets Slowness IV for 12 seconds.", 3, (s, p) -> p.forEach(player -> status(player, StatusEffects.SLOWNESS, 240, 3)));
-        add("Mining Fatigue", "Everyone gets Mining Fatigue IV for 15 seconds.", 3, (s, p) -> p.forEach(player -> status(player, StatusEffects.MINING_FATIGUE, 300, 3)));
-        add("Hunger", "Everyone gets Hunger III for 20 seconds.", 3, (s, p) -> p.forEach(player -> status(player, StatusEffects.HUNGER, 400, 2)));
-        add("Rotten Food", "One player gets Rotten Flesh and Hunger.", 3, (s, p) -> { ServerPlayerEntity player = randomPlayer(p); give(player, Items.ROTTEN_FLESH, 16); status(player, StatusEffects.HUNGER, 300, 2); });
-        add("Inventory Roulette", "A random player gets 6 random junk items.", 4, (s, p) -> giveRandomJunk(randomPlayer(p)));
-        add("Drop One", "Everyone drops one random inventory stack.", 3, (s, p) -> p.forEach(this::dropRandomStack));
-
-        add("Nightmare Weather", "The weather turns into a thunderstorm.", 3, (s, p) -> execute(s, "weather thunder 999999"));
-        add("Sun Party", "The storm is cleared and the sun returns.", 2, (s, p) -> execute(s, "weather clear 999999"));
-        add("Midnight", "It suddenly becomes midnight.", 3, (s, p) -> execute(s, "time set midnight"));
-        add("Noon", "It suddenly becomes noon.", 3, (s, p) -> execute(s, "time set noon"));
-        add("Tiny Boom", "A small explosion happens near one random player.", 2, (s, p) -> explodeNear(randomPlayer(p), 2.0f));
-        add("Party Popper", "Fireworks launch around everyone.", 3, (s, p) -> execute(s, "execute as @a at @s run summon firework_rocket ~ ~2 ~ {LifeTime:20}"));
-        add("Mob Roulette", "One random player gets a completely random mob nearby.", 4, (s, p) -> {
-            EntityType<?>[] mobs = {EntityType.COW, EntityType.PIG, EntityType.SHEEP, EntityType.SLIME, EntityType.WITCH, EntityType.ENDERMAN, EntityType.GOAT, EntityType.FROG};
-            spawnNear(randomPlayer(p), mobs[RANDOM.nextInt(mobs.length)], 2);
-        });
-        add("Chunky Chickens", "Everyone gets a chicken on their head... kind of.", 3, (s, p) -> p.forEach(player -> spawnNear(player, EntityType.CHICKEN, 1)));
-        add("Lucky Pocket", "Everyone gets a random useful item.", 4, (s, p) -> {
-            net.minecraft.item.Item[] useful = {Items.IRON_INGOT, Items.GOLD_INGOT, Items.DIAMOND, Items.ENDER_PEARL, Items.GOLDEN_APPLE, Items.BREAD, Items.ARROW, Items.TORCH};
-            p.forEach(player -> give(player, useful[RANDOM.nextInt(useful.length)], 1 + RANDOM.nextInt(4)));
-        });
-        add("Curse of Chaos", "One player gets 4 random bad effects at once.", 2, (s, p) -> {
-            ServerPlayerEntity player = randomPlayer(p);
-            status(player, StatusEffects.BLINDNESS, 200, 0);
-            status(player, StatusEffects.SLOWNESS, 200, 2);
-            status(player, StatusEffects.HUNGER, 300, 2);
-            status(player, StatusEffects.WEAKNESS, 300, 1);
-        });
-    }
-
-    private void add(String name, String description, int weight, BiConsumer<MinecraftServer, List<ServerPlayerEntity>> action) {
-        events.add(new ChaosEvent(name, description, weight, action));
-    }
-
-    private void damageRandom(List<ServerPlayerEntity> players, float amount) {
-        damage(randomPlayer(players), amount);
-    }
-
-    private void damage(ServerPlayerEntity player, float amount) {
-        if (player.isCreative() || player.isSpectator()) return;
-        player.damage(player.getEntityWorld(), player.getDamageSources().generic(), amount);
-    }
-
-    private void strikeNear(ServerPlayerEntity player, int count) {
-        for (int i = 0; i < count; i++) {
-            double x = player.getX() + (RANDOM.nextDouble() * 8 - 4);
-            double z = player.getZ() + (RANDOM.nextDouble() * 8 - 4);
-            int y = player.getEntityWorld().getTopY(Heightmap.Type.MOTION_BLOCKING, (int) x, (int) z);
-            execute(server, "summon minecraft:lightning_bolt " + x + " " + y + " " + z);
-        }
-    }
-
-    private void explodeNear(ServerPlayerEntity player, float power) {
-        execute(server, "execute positioned " + player.getX() + " " + player.getY() + " " + player.getZ() + " run summon minecraft:tnt ~2 ~ ~ {fuse:40}");
-    }
-
-    private void execute(MinecraftServer server, String command) {
-        server.getCommandManager().parseAndExecute(server.getCommandSource(), command);
-    }
-
-    private void playSound(MinecraftServer server, String sound, float volume, float pitch) {
-        if (server == null) return;
-        execute(server, "execute as @a at @s run playsound " + sound + " master @s ~ ~ ~ " + volume + " " + pitch);
-    }
-
-    private void giveRandomJunk(ServerPlayerEntity player) {
-        net.minecraft.item.Item[] junk = {Items.ROTTEN_FLESH, Items.DIRT, Items.COBBLESTONE, Items.KELP, Items.STRING, Items.STICK, Items.POISONOUS_POTATO, Items.GRAVEL, Items.FEATHER, Items.SPIDER_EYE};
-        for (int i = 0; i < 6; i++) give(player, junk[RANDOM.nextInt(junk.length)], 1 + RANDOM.nextInt(12));
-    }
-
-    private void dropRandomStack(ServerPlayerEntity player) {
-        if (player.getInventory().isEmpty()) return;
-        int attempts = 0;
-        while (attempts++ < 20) {
-            int slot = RANDOM.nextInt(player.getInventory().size());
-            ItemStack stack = player.getInventory().getStack(slot);
-            if (!stack.isEmpty()) {
-                player.dropItem(stack.copy(), true, false);
-                player.getInventory().setStack(slot, ItemStack.EMPTY);
-                return;
-            }
-        }
+        // Place all your events.add(new ChaosEvent(...)) calls here
     }
 }
